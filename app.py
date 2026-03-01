@@ -260,7 +260,8 @@ def fill_template_word(template_bytes, data_dict):
 
 def extract_structured_data_with_ai(text, placeholders):
     """
-    Dùng OpenAI để trích xuất dữ liệu có cấu trúc từ text.
+    Dùng OpenAI để trích xuất & lọc dữ liệu có cấu trúc từ text.
+    AI sẽ quyết định lấy thông tin nào từ text để phù hợp với placeholders.
     Trả về dict: {"field_name": "value", ...}
     """
     api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", None)
@@ -271,21 +272,25 @@ def extract_structured_data_with_ai(text, placeholders):
     client = OpenAI()
     
     # Tạo example JSON
-    example_dict = {ph: f"[{ph}]" for ph in placeholders}
+    example_dict = {ph: f"[thông tin về {ph}]" for ph in placeholders}
     
-    prompt = f"""Bạn là chuyên gia trích xuất dữ liệu có cấu trúc.
+    prompt = f"""Bạn là chuyên gia trích xuất & lọc dữ liệu.
 
-Từ văn bản sau, hãy trích xuất các thông tin ứng với các trường sau: {', '.join(placeholders)}
+NHIỆM VỤ:
+Từ văn bản sau, hãy PHÂN TÍCH và TRÍCH XUẤT các thông tin phù hợp với các trường sau:
+{', '.join(placeholders)}
 
-Văn bản:
+VĂN BẢN:
 {text}
 
-Yêu cầu:
-1. Trả về CHÍNH XÁC là JSON format với key là tên trường, value là dữ liệu trích xuất
-2. Nếu không tìm thấy dữ liệu nào, để value là chuỗi rỗng ""
-3. CHỈ TRẢ VỀ JSON, không có text khác
+HƯỚNG DẪN:
+1. Đọc kỹ văn bản để hiểu nội dung chính
+2. Lọc ra thông tin LIÊN QUAN đến các trường được yêu cầu
+3. Nếu không tìm thấy thông tin nào, để value là chuỗi rỗng ""
+4. Trả về CHÍNH XÁC định dạng JSON (không có text khác)
+5. Giá trị phải ngắn gọn, rõ ràng
 
-Ví dụ format output:
+FORMAT OUTPUT (CHỈNH XÁC):
 {json.dumps(example_dict, ensure_ascii=False)}
 """
     
@@ -315,6 +320,7 @@ Ví dụ format output:
         return data_dict
     except Exception as e:
         raise Exception(f"Lỗi gọi OpenAI: {str(e)}")
+
 
 
 
@@ -355,6 +361,18 @@ with tab2:
             key="data_files_uploader"
         )
     
+    # Khởi tạo session state
+    if "extracted_data" not in st.session_state:
+        st.session_state.extracted_data = {}
+    if "last_uploaded_files" not in st.session_state:
+        st.session_state.last_uploaded_files = None
+    
+    # Kiểm tra nếu file upload thay đổi → reset dữ liệu cũ
+    current_file_names = tuple(f.name for f in data_files) if data_files else None
+    if current_file_names != st.session_state.last_uploaded_files:
+        st.session_state.extracted_data = {}
+        st.session_state.last_uploaded_files = current_file_names
+    
     if template_file and data_files:
         st.markdown("---")
         
@@ -369,21 +387,23 @@ with tab2:
             st.warning("Không tìm thấy placeholder nào! Kiểm tra template có định dạng {tên_trường}?")
         
         st.markdown("---")
-        st.subheader("4️⃣ Xử lý và tạo file")
+        st.subheader("4️⃣ Trích xuất thông tin từ file")
         
-        if st.button("✨ Bắt đầu xử lý", type="primary", use_container_width=True):
-            try:
-                filled_files = []
-                progress_bar = st.progress(0, text="Đang xử lý...")
+        col_extract, col_clear = st.columns([2, 1])
+        
+        with col_extract:
+            if st.button("🔍 Trích xuất thông tin", type="secondary", use_container_width=True):
+                st.session_state.extracted_data = {}
+                progress_bar = st.progress(0, text="Đang trích xuất...")
                 
                 for idx, data_file in enumerate(data_files):
                     progress_bar.progress(
                         (idx + 1) / len(data_files),
-                        text=f"Xử lý {idx + 1}/{len(data_files)}: {data_file.name}"
+                        text=f"Trích xuất {idx + 1}/{len(data_files)}: {data_file.name}"
                     )
                     
                     try:
-                        # Bước 1: Trích xuất text từ file
+                        # Bước 1: Trích xuất text
                         file_ext = data_file.name.split('.')[-1].lower()
                         file_bytes = data_file.getvalue()
                         extracted_text = extract_text_from_file(file_bytes, file_ext)
@@ -392,73 +412,125 @@ with tab2:
                             st.warning(f"⚠️ {data_file.name}: {extracted_text}")
                             continue
                         
-                        # Bước 2: AI trích xuất dữ liệu có cấu trúc
+                        # Bước 2: AI phân tích và lọc dữ liệu
                         data_dict = extract_structured_data_with_ai(extracted_text, placeholders)
                         
-                        # Bước 3: Điền vào template
-                        filled_bytes = fill_template_word(template_bytes, data_dict)
-                        
-                        # Lưu để download
-                        file_name = data_file.name.rsplit('.', 1)[0]
-                        filled_files.append({
-                            "name": f"{file_name}_filled.docx",
-                            "bytes": filled_bytes,
+                        st.session_state.extracted_data[data_file.name] = {
+                            "text": extracted_text,
                             "data": data_dict,
-                            "source": data_file.name
-                        })
+                            "file": data_file
+                        }
                     
                     except Exception as e:
                         st.warning(f"⚠️ Lỗi xử lý {data_file.name}: {str(e)}")
                 
                 progress_bar.empty()
-                
-                # Hiển thị kết quả
-                if filled_files:
-                    st.success(f"✅ Đã xử lý {len(filled_files)}/{len(data_files)} file thành công!")
-                    
-                    st.markdown("---")
-                    st.subheader("📥 Tải kết quả:")
-                    
-                    # Download từng file
-                    for item in filled_files:
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.text(f"📄 {item['name']} (từ: {item['source']})")
-                        with col2:
-                            st.download_button(
-                                "⬇️ Tải",
-                                data=item['bytes'],
-                                file_name=item['name'],
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key=f"dl_filled_{item['name']}"
-                            )
-                        
-                        # Hiển thị dữ liệu đã trích xuất
-                        with st.expander(f"Dữ liệu - {item['name']}"):
-                            for key, value in item['data'].items():
-                                st.text(f"{key}: {value}")
-                    
-                    # Option tải tất cả (zip)
-                    st.markdown("---")
-                    if st.button("📦 Tải tất cả file (zip)", use_container_width=True):
-                        zip_buffer = io.BytesIO()
-                        with zipfile.ZipFile(zip_buffer, 'w') as zf:
-                            for item in filled_files:
-                                zf.writestr(item['name'], item['bytes'])
-                        
-                        zip_buffer.seek(0)
-                        st.download_button(
-                            "⬇️ Tải ZIP",
-                            data=zip_buffer.getvalue(),
-                            file_name="ket_qua_dien_mau.zip",
-                            mime="application/zip",
-                            key="dl_zip_all"
-                        )
-                else:
-                    st.error("❌ Không thể xử lý file nào. Kiểm tra lại định dạng hoặc dữ liệu.")
+                st.rerun()
+        
+        with col_clear:
+            if st.button("🗑️ Xóa dữ liệu", type="secondary", use_container_width=True):
+                st.session_state.extracted_data = {}
+                st.rerun()
+        
+        # Hiển thị dữ liệu đã trích xuất
+        if "extracted_data" in st.session_state and st.session_state.extracted_data:
+            st.markdown("---")
+            st.subheader("5️⃣ Dữ liệu được trích xuất & lọc:")
+            st.info(f"📦 Đã lưu dữ liệu từ {len(st.session_state.extracted_data)} file. Bạn có thể sửa dữ liệu bên dưới.")
             
-            except Exception as e:
-                st.error(f"❌ Lỗi: {str(e)}")
+            for file_name, file_data in st.session_state.extracted_data.items():
+                with st.expander(f"📄 {file_name}", expanded=True):
+                    st.write("**Thông tin được lọc:**")
+                    
+                    # Hiển thị dữ liệu được lọc
+                    for key, value in file_data["data"].items():
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            st.text(f"**{key}:**")
+                        with col2:
+                            # Cho phép edit thông tin
+                            edited_value = st.text_input(
+                                label="edit",
+                                value=str(value),
+                                key=f"edit_{file_name}_{key}",
+                                label_visibility="collapsed"
+                            )
+                            file_data["data"][key] = edited_value
+                    
+                    # Hiển thị text gốc
+                    with st.expander("📋 Text gốc trích xuất"):
+                        st.text_area(
+                            "Nội dung ban đầu:",
+                            value=file_data["text"],
+                            height=150,
+                            disabled=True,
+                            key=f"text_{file_name}"
+                        )
+            
+            st.markdown("---")
+            st.subheader("6️⃣ Tạo file từ mẫu")
+            
+            if st.button("✨ Điền mẫu và tạo file", type="primary", use_container_width=True):
+                try:
+                    filled_files = []
+                    
+                    for file_name, file_data in st.session_state.extracted_data.items():
+                        try:
+                            # Điền vào template
+                            filled_bytes = fill_template_word(template_bytes, file_data["data"])
+                            
+                            output_name = file_name.rsplit('.', 1)[0]
+                            filled_files.append({
+                                "name": f"{output_name}_filled.docx",
+                                "bytes": filled_bytes,
+                                "data": file_data["data"],
+                                "source": file_name
+                            })
+                        except Exception as e:
+                            st.warning(f"⚠️ Lỗi điền mẫu cho {file_name}: {str(e)}")
+                    
+                    if filled_files:
+                        st.success(f"✅ Đã tạo {len(filled_files)} file thành công!")
+                        
+                        st.markdown("---")
+                        st.subheader("📥 Tải kết quả:")
+                        
+                        # Download từng file
+                        for item in filled_files:
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                st.text(f"📄 {item['name']} (từ: {item['source']})")
+                            with col2:
+                                st.download_button(
+                                    "⬇️ Tải",
+                                    data=item['bytes'],
+                                    file_name=item['name'],
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key=f"dl_filled_{item['name']}"
+                                )
+                        
+                        # Option tải tất cả (zip)
+                        st.markdown("---")
+                        if st.button("📦 Tải tất cả file (zip)", use_container_width=True):
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, 'w') as zf:
+                                for item in filled_files:
+                                    zf.writestr(item['name'], item['bytes'])
+                            
+                            zip_buffer.seek(0)
+                            st.download_button(
+                                "⬇️ Tải ZIP",
+                                data=zip_buffer.getvalue(),
+                                file_name="ket_qua_dien_mau.zip",
+                                mime="application/zip",
+                                key="dl_zip_all"
+                            )
+                    else:
+                        st.error("❌ Không thể tạo file nào.")
+                
+                except Exception as e:
+                    st.error(f"❌ Lỗi: {str(e)}")
+
 
 
 
