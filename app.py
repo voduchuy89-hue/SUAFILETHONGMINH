@@ -13,6 +13,7 @@ from openpyxl import load_workbook
 import re
 import json
 import zipfile
+import unicodedata
 
 # ========================================================================================
 # CẤU HÌNH TRANG
@@ -313,6 +314,92 @@ def fill_template_with_labels(template_bytes, data_dict):
         raise Exception(f"Lỗi điền template (label fallback): {str(e)}")
 
 
+def normalize_text(s: str) -> str:
+    """Lowercase, strip, remove accents and non-alphanum for matching."""
+    if not s:
+        return ""
+    s = s.lower().strip()
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+    # keep alnum and spaces
+    s = re.sub(r'[^0-9a-z\s]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def detect_labels_in_template(template_bytes):
+    """
+    Scan a .docx template and return likely label strings.
+    Heuristics: paragraphs with short length (<=80 chars) or ending with ':'
+    """
+    try:
+        doc = docx.Document(io.BytesIO(template_bytes))
+        labels = []
+        for paragraph in doc.paragraphs:
+            text = paragraph.text.strip()
+            if not text:
+                continue
+            if len(text) <= 80 or text.endswith(':') or '\t' in text:
+                # split by colon if present and take left part as label
+                if ':' in text:
+                    left = text.split(':', 1)[0].strip()
+                    if left:
+                        labels.append(left)
+                        continue
+                # if short line, treat as label
+                # ignore lines that look like long sentences
+                if len(text.split()) <= 6:
+                    labels.append(text)
+        # deduplicate preserving order
+        seen = set()
+        out = []
+        for l in labels:
+            if l not in seen:
+                seen.add(l)
+                out.append(l)
+        return out
+    except Exception:
+        return []
+
+
+def map_data_to_labels(data_dict, labels):
+    """
+    Map AI-extracted keys to template labels using normalized matching.
+    Returns mapped dict: {label: value}
+    """
+    mapped = {label: "" for label in labels}
+    if not data_dict or not labels:
+        return mapped
+
+    # Precompute normalized keys
+    norm_keys = {k: normalize_text(k) for k in data_dict.keys()}
+    norm_labels = {lab: normalize_text(lab) for lab in labels}
+
+    for lab, nlab in norm_labels.items():
+        best_key = None
+        best_score = 0
+        for k, nk in norm_keys.items():
+            score = 0
+            if nk and nlab:
+                if nk == nlab:
+                    score = 100
+                elif nk in nlab or nlab in nk:
+                    score = 70
+                else:
+                    # word overlap
+                    set_k = set(nk.split())
+                    set_l = set(nlab.split())
+                    inter = set_k & set_l
+                    if inter:
+                        score = 30 + 10 * len(inter)
+            if score > best_score:
+                best_score = score
+                best_key = k
+        if best_key and best_score >= 30:
+            mapped[lab] = data_dict.get(best_key, "")
+    return mapped
+
+
 
 
 
@@ -559,11 +646,20 @@ with tab2:
                             for key, value in file_data["data"].items():
                                 st.text(f"  {{{key}}} → {value}")
                             
-                            # Điền vào template (dùng placeholder nếu có, ngược lại dùng label-fallback)
+                            # Điền vào template (dùng placeholder nếu có, ngược lại detect labels + map và dùng label-fallback)
                             if placeholders:
                                 filled_bytes = fill_template_word(template_bytes, file_data["data"])
                             else:
-                                filled_bytes = fill_template_with_labels(template_bytes, file_data["data"])
+                                # detect labels in template
+                                template_labels = detect_labels_in_template(template_bytes)
+                                st.info(f"🔎 Detected labels in template: {template_labels}")
+                                # map AI keys to template labels
+                                mapped = map_data_to_labels(file_data["data"], template_labels)
+                                st.info(f"🔁 Mapping label -> value: {mapped}")
+                                # use mapped values to fill labels
+                                filled_bytes = fill_template_with_labels(template_bytes, mapped)
+                                # update saved data for display/download
+                                file_data["data_mapped"] = mapped
                             
                             output_name = file_name.rsplit('.', 1)[0]
                             filled_files.append({
