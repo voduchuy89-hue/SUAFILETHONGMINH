@@ -328,9 +328,9 @@ tab1, tab2 = st.tabs(["📊 OCR (Trích xuất text)", "📝 Điền Mẫu (Temp
 
 with tab2:
     st.header("Điền Mẫu Tự Động")
-    st.write("Chọn folder dữ liệu + file mẫu Word → App sẽ tự động điền dữ liệu vào mẫu.")
+    st.write("Upload file mẫu + file dữ liệu → App sẽ tự động điền dữ liệu vào mẫu.")
     
-    col_template, col_folder = st.columns(2)
+    col_template, col_files = st.columns(2)
     
     with col_template:
         st.subheader("1️⃣ Chọn file mẫu")
@@ -340,188 +340,126 @@ with tab2:
             key="template_uploader"
         )
     
-    with col_folder:
-        st.subheader("2️⃣ Chọn thư mục dữ liệu")
-        folder_path = st.text_input(
-            "Nhập đường dẫn folder (Windows)",
-            placeholder="Ví dụ: C:\\Users\\YourName\\Documents\\data",
-            key="folder_path_input"
-        ).strip()  # Trim whitespace
+    with col_files:
+        st.subheader("2️⃣ Chọn file dữ liệu")
+        st.info("""
+        Upload các file có dữ liệu:
+        - Ảnh, PDF (sẽ dùng OCR)
+        - Word, Excel, Text (đọc trực tiếp)
+        - Tối đa 20 file
+        """)
+        data_files = st.file_uploader(
+            "Chọn file dữ liệu",
+            type=['png', 'jpg', 'jpeg', 'pdf', 'docx', 'xlsx', 'txt'],
+            accept_multiple_files=True,
+            key="data_files_uploader"
+        )
     
-    if folder_path:
-        # Kiểm tra folder
-        st.info(f"📁 Đường dẫn nhập: `{folder_path}`")
-        
-        if st.button("🔍 Kiểm tra folder"):
-            # Normalize path
-            normalized_path = os.path.normpath(folder_path)
-            st.info(f"📁 Đường dẫn chuẩn hóa: `{normalized_path}`")
-            st.info(f"📁 Kiểm tra xem folder tồn tại: `{os.path.isdir(normalized_path)}`")
-            
-            if os.path.isdir(normalized_path):
-                st.success("✅ Folder tồn tại!")
-                
-                # Danh sách file
-                try:
-                    supported_extensions = ('.pdf', '.png', '.jpg', '.jpeg', '.docx', '.xlsx', '.txt')
-                    all_files_in_folder = os.listdir(normalized_path)
-                    st.info(f"📋 Tổng file/folder trong `{normalized_path}`: {len(all_files_in_folder)}")
-                    
-                    all_files = [
-                        f for f in all_files_in_folder
-                        if os.path.isfile(os.path.join(normalized_path, f)) and f.lower().endswith(supported_extensions)
-                    ]
-                    
-                    if all_files:
-                        st.success(f"✅ Tìm thấy {len(all_files)} file hỗ trợ:")
-                        with st.expander("📋 Danh sách file"):
-                            for f in all_files:
-                                st.text(f"  • {f}")
-                        
-                        # Lưu folder path vào session state nếu valid
-                        st.session_state.valid_folder_path = normalized_path
-                    else:
-                        st.warning(f"⚠️ Folder có {len(all_files_in_folder)} file/folder nhưng không có file hỗ trợ!")
-                        st.info("Hỗ trợ: .pdf, .png, .jpg, .jpeg, .docx, .xlsx, .txt")
-                        with st.expander("📋 File/folder trong thư mục"):
-                            for f in all_files_in_folder:
-                                st.text(f"  • {f}")
-                except Exception as e:
-                    st.error(f"❌ Lỗi đọc folder: {str(e)}")
-            else:
-                st.error(f"❌ Folder không tồn tại: {normalized_path}")
-                st.error(f"Kiểm tra:")
-                st.error(f"  • Đường dẫn: `{normalized_path}`")
-                st.error(f"  • Có 'D:' drive không?")
-                st.error(f"  • Folder '1' có tồn tại không?")
-                st.info("💡 Thử viết đầy đủ: `D:\\1` hoặc `D:\\1\\`")
-    
-    if template_file and "valid_folder_path" in st.session_state:
+    if template_file and data_files:
         st.markdown("---")
         
-        folder_path = st.session_state.valid_folder_path
+        # Detect placeholders trong template
+        template_bytes = template_file.getvalue()
+        placeholders = detect_placeholders_in_template(template_bytes)
         
-        # Lấy danh sách file từ folder
-        supported_extensions = ('.pdf', '.png', '.jpg', '.jpeg', '.docx', '.xlsx', '.txt')
-        try:
-            all_files = [
-                os.path.join(folder_path, f)
-                for f in os.listdir(folder_path)
-                if os.path.isfile(os.path.join(folder_path, f)) and f.lower().endswith(supported_extensions)
-            ]
-            
-            if not all_files:
-                st.warning(f"⚠️ Không tìm thấy file nào trong folder. Hỗ trợ: {', '.join(supported_extensions)}")
-            else:
-                st.success(f"✅ Tìm thấy {len(all_files)} file")
+        st.subheader("3️⃣ Các trường cần điền:")
+        if placeholders:
+            st.success(f"Tìm thấy {len(placeholders)} trường: {', '.join(placeholders)}")
+        else:
+            st.warning("Không tìm thấy placeholder nào! Kiểm tra template có định dạng {tên_trường}?")
+        
+        st.markdown("---")
+        st.subheader("4️⃣ Xử lý và tạo file")
+        
+        if st.button("✨ Bắt đầu xử lý", type="primary", use_container_width=True):
+            try:
+                filled_files = []
+                progress_bar = st.progress(0, text="Đang xử lý...")
                 
-                # Detect placeholders trong template
-                template_bytes = template_file.getvalue()
-                placeholders = detect_placeholders_in_template(template_bytes)
-                
-                st.subheader("3️⃣ Các trường cần điền:")
-                if placeholders:
-                    st.success(f"Tìm thấy {len(placeholders)} trường: {', '.join(placeholders)}")
-                else:
-                    st.warning("Không tìm thấy placeholder nào! Kiểm tra template có định dạng {tên_trường}?")
-                
-                st.markdown("---")
-                st.subheader("4️⃣ Xử lý và tạo file")
-                
-                if st.button("✨ Bắt đầu xử lý", type="primary", use_container_width=True):
+                for idx, data_file in enumerate(data_files):
+                    progress_bar.progress(
+                        (idx + 1) / len(data_files),
+                        text=f"Xử lý {idx + 1}/{len(data_files)}: {data_file.name}"
+                    )
+                    
                     try:
-                        filled_files = []
-                        progress_bar = st.progress(0, text="Đang xử lý...")
+                        # Bước 1: Trích xuất text từ file
+                        file_ext = data_file.name.split('.')[-1].lower()
+                        file_bytes = data_file.getvalue()
+                        extracted_text = extract_text_from_file(file_bytes, file_ext)
                         
-                        for idx, file_path in enumerate(all_files):
-                            progress_bar.progress(
-                                (idx + 1) / len(all_files),
-                                text=f"Xử lý {idx + 1}/{len(all_files)}: {os.path.basename(file_path)}"
-                            )
-                            
-                            try:
-                                # Bước 1: Đọc file
-                                with open(file_path, 'rb') as f:
-                                    file_bytes = f.read()
-                                
-                                # Bước 2: Trích xuất text
-                                file_ext = os.path.splitext(file_path)[1].lstrip('.').lower()
-                                extracted_text = extract_text_from_file(file_bytes, file_ext)
-                                
-                                if extracted_text.startswith("Lỗi"):
-                                    st.warning(f"⚠️ {os.path.basename(file_path)}: {extracted_text}")
-                                    continue
-                                
-                                # Bước 3: AI trích xuất dữ liệu có cấu trúc
-                                data_dict = extract_structured_data_with_ai(extracted_text, placeholders)
-                                
-                                # Bước 4: Điền vào template
-                                filled_bytes = fill_template_word(template_bytes, data_dict)
-                                
-                                # Lưu để download
-                                file_name = os.path.splitext(os.path.basename(file_path))[0]
-                                filled_files.append({
-                                    "name": f"{file_name}_filled.docx",
-                                    "bytes": filled_bytes,
-                                    "data": data_dict,
-                                    "source": os.path.basename(file_path)
-                                })
-                            
-                            except Exception as e:
-                                st.warning(f"⚠️ Lỗi xử lý {os.path.basename(file_path)}: {str(e)}")
+                        if extracted_text.startswith("Lỗi"):
+                            st.warning(f"⚠️ {data_file.name}: {extracted_text}")
+                            continue
                         
-                        progress_bar.empty()
+                        # Bước 2: AI trích xuất dữ liệu có cấu trúc
+                        data_dict = extract_structured_data_with_ai(extracted_text, placeholders)
                         
-                        # Hiển thị kết quả
-                        if filled_files:
-                            st.success(f"✅ Đã xử lý {len(filled_files)}/{len(all_files)} file thành công!")
-                            
-                            st.markdown("---")
-                            st.subheader("📥 Tải kết quả:")
-                            
-                            # Download từng file
-                            for item in filled_files:
-                                col1, col2 = st.columns([3, 1])
-                                with col1:
-                                    st.text(f"📄 {item['name']} (từ: {item['source']})")
-                                with col2:
-                                    st.download_button(
-                                        "⬇️ Tải",
-                                        data=item['bytes'],
-                                        file_name=item['name'],
-                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                        key=f"dl_filled_{item['name']}"
-                                    )
-                                
-                                # Hiển thị dữ liệu đã trích xuất
-                                with st.expander(f"Dữ liệu - {item['name']}"):
-                                    for key, value in item['data'].items():
-                                        st.text(f"{key}: {value}")
-                            
-                            # Option tải tất cả (zip)
-                            st.markdown("---")
-                            if st.button("📦 Tải tất cả file (zip)", use_container_width=True):
-                                zip_buffer = io.BytesIO()
-                                with zipfile.ZipFile(zip_buffer, 'w') as zf:
-                                    for item in filled_files:
-                                        zf.writestr(item['name'], item['bytes'])
-                                
-                                zip_buffer.seek(0)
-                                st.download_button(
-                                    "⬇️ Tải ZIP",
-                                    data=zip_buffer.getvalue(),
-                                    file_name="ket_qua_dien_mau.zip",
-                                    mime="application/zip",
-                                    key="dl_zip_all"
-                                )
-                        else:
-                            st.error("❌ Không thể xử lý file nào. Kiểm tra lại định dạng hoặc dữ liệu.")
+                        # Bước 3: Điền vào template
+                        filled_bytes = fill_template_word(template_bytes, data_dict)
+                        
+                        # Lưu để download
+                        file_name = data_file.name.rsplit('.', 1)[0]
+                        filled_files.append({
+                            "name": f"{file_name}_filled.docx",
+                            "bytes": filled_bytes,
+                            "data": data_dict,
+                            "source": data_file.name
+                        })
                     
                     except Exception as e:
-                        st.error(f"❌ Lỗi: {str(e)}")
-        
-        except Exception as e:
-            st.error(f"❌ Lỗi đọc folder: {str(e)}")
+                        st.warning(f"⚠️ Lỗi xử lý {data_file.name}: {str(e)}")
+                
+                progress_bar.empty()
+                
+                # Hiển thị kết quả
+                if filled_files:
+                    st.success(f"✅ Đã xử lý {len(filled_files)}/{len(data_files)} file thành công!")
+                    
+                    st.markdown("---")
+                    st.subheader("📥 Tải kết quả:")
+                    
+                    # Download từng file
+                    for item in filled_files:
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.text(f"📄 {item['name']} (từ: {item['source']})")
+                        with col2:
+                            st.download_button(
+                                "⬇️ Tải",
+                                data=item['bytes'],
+                                file_name=item['name'],
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key=f"dl_filled_{item['name']}"
+                            )
+                        
+                        # Hiển thị dữ liệu đã trích xuất
+                        with st.expander(f"Dữ liệu - {item['name']}"):
+                            for key, value in item['data'].items():
+                                st.text(f"{key}: {value}")
+                    
+                    # Option tải tất cả (zip)
+                    st.markdown("---")
+                    if st.button("📦 Tải tất cả file (zip)", use_container_width=True):
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, 'w') as zf:
+                            for item in filled_files:
+                                zf.writestr(item['name'], item['bytes'])
+                        
+                        zip_buffer.seek(0)
+                        st.download_button(
+                            "⬇️ Tải ZIP",
+                            data=zip_buffer.getvalue(),
+                            file_name="ket_qua_dien_mau.zip",
+                            mime="application/zip",
+                            key="dl_zip_all"
+                        )
+                else:
+                    st.error("❌ Không thể xử lý file nào. Kiểm tra lại định dạng hoặc dữ liệu.")
+            
+            except Exception as e:
+                st.error(f"❌ Lỗi: {str(e)}")
+
 
 
 
