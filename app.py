@@ -258,6 +258,61 @@ def fill_template_word(template_bytes, data_dict):
         raise Exception(f"Lỗi điền template: {str(e)}")
 
 
+def fill_template_with_labels(template_bytes, data_dict):
+    """
+    Fallback filler: nếu template không có placeholders, tìm các label (key)
+    trong văn bản mẫu và điền giá trị sau label.
+    - Nếu paragraph chứa chính xác label, thay bằng 'label: value'
+    - Nếu paragraph chứa label kèm text khác, sẽ thay phần label bằng 'label: value'
+    Trả về bytes của document đã điền.
+    """
+    try:
+        doc = docx.Document(io.BytesIO(template_bytes))
+
+        def replace_label_in_paragraph(paragraph, data_dict):
+            para_text = paragraph.text
+            modified = para_text
+            for key, val in data_dict.items():
+                if not key:
+                    continue
+                # match case-insensitive
+                idx = para_text.lower().find(key.lower())
+                if idx != -1:
+                    # If paragraph is exactly the label or contains only small punctuation after
+                    if para_text.strip().lower() == key.lower() or para_text.strip().lower().startswith(key.lower()):
+                        # Replace the first occurrence with 'key: value'
+                        # Build replacement preserving original label casing
+                        start = para_text[:idx]
+                        end = para_text[idx+len(key):]
+                        replacement = f"{para_text[idx:idx+len(key)]}: {val}"
+                        modified = (start + replacement + end).strip()
+                    else:
+                        # For other cases, replace label occurrence with 'label: value'
+                        modified = re.sub(re.escape(key), f"{key}: {val}", modified, flags=re.IGNORECASE)
+            if modified != para_text:
+                # remove runs
+                for run in list(paragraph.runs):
+                    r = run._element
+                    r.getparent().remove(r)
+                paragraph.add_run(modified)
+
+        for paragraph in doc.paragraphs:
+            replace_label_in_paragraph(paragraph, data_dict)
+
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        replace_label_in_paragraph(paragraph, data_dict)
+
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer.getvalue()
+    except Exception as e:
+        raise Exception(f"Lỗi điền template (label fallback): {str(e)}")
+
+
 
 
 
@@ -277,10 +332,27 @@ def extract_structured_data_with_ai(text, placeholders):
     os.environ["OPENAI_API_KEY"] = api_key
     client = OpenAI()
     
-    # Tạo example JSON
-    example_dict = {ph: f"[thông tin về {ph}]" for ph in placeholders}
-    
-    prompt = f"""Bạn là chuyên gia trích xuất & lọc dữ liệu.
+    # Nếu không có placeholders, yêu cầu AI tự quyết định các trường cần trích xuất
+    if not placeholders:
+        prompt = f"""Bạn là chuyên gia trích xuất & lọc dữ liệu.
+
+NHIỆM VỤ:
+Từ văn bản sau, hãy PHÂN TÍCH và TRÍCH XUẤT những cặp key-value quan trọng (tối đa 12 cặp)
+và trả về dưới dạng JSON, ví dụ: {{"tên": "...", "số": "..."}}.
+
+VĂN BẢN:
+{text}
+
+HƯỚNG DẪN:
+1. Chỉ trả về một JSON duy nhất, không có văn bản khác.
+2. Key nên ngắn gọn, tiếng Việt không dấu hoặc có dấu, tuỳ hợp lý.
+3. Nếu không tìm thấy, để value là chuỗi rỗng "".
+4. Trả về tối đa 12 trường.
+"""
+    else:
+        # Tạo example JSON
+        example_dict = {ph: f"[thông tin về {ph}]" for ph in placeholders}
+        prompt = f"""Bạn là chuyên gia trích xuất & lọc dữ liệu.
 
 NHIỆM VỤ:
 Từ văn bản sau, hãy PHÂN TÍCH và TRÍCH XUẤT các thông tin phù hợp với các trường sau:
@@ -487,8 +559,11 @@ with tab2:
                             for key, value in file_data["data"].items():
                                 st.text(f"  {{{key}}} → {value}")
                             
-                            # Điền vào template
-                            filled_bytes = fill_template_word(template_bytes, file_data["data"])
+                            # Điền vào template (dùng placeholder nếu có, ngược lại dùng label-fallback)
+                            if placeholders:
+                                filled_bytes = fill_template_word(template_bytes, file_data["data"])
+                            else:
+                                filled_bytes = fill_template_with_labels(template_bytes, file_data["data"])
                             
                             output_name = file_name.rsplit('.', 1)[0]
                             filled_files.append({
