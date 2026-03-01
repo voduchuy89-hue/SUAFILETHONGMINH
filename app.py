@@ -217,23 +217,26 @@ def fill_template_word(template_bytes, data_dict):
         
         # Hàm helper để thay thế placeholder trong paragraph
         def replace_in_paragraph(paragraph, data_dict):
-            # Lấy full text từ các run
+            # Get text từ tất cả runs
             full_text = "".join([run.text for run in paragraph.runs])
             original_text = full_text
             
             # Thay thế tất cả placeholder
+            modified_text = full_text
             for placeholder, value in data_dict.items():
                 pattern = r'\{' + re.escape(placeholder) + r'\}'
-                full_text = re.sub(pattern, str(value), full_text)
+                modified_text = re.sub(pattern, str(value) if value else "", modified_text)
             
             # Nếu có thay đổi, cập nhật paragraph
-            if full_text != original_text:
-                # Clear runs - xóa toàn bộ run cũ
+            if modified_text != original_text:
+                # Xóa tất cả run cũ
                 for run in list(paragraph.runs):
                     r = run._element
                     r.getparent().remove(r)
+                
                 # Thêm text mới
-                paragraph.add_run(full_text)
+                if modified_text:
+                    paragraph.add_run(modified_text)
         
         # Điền trong paragraphs
         for paragraph in doc.paragraphs:
@@ -253,6 +256,9 @@ def fill_template_word(template_bytes, data_dict):
         return buffer.getvalue()
     except Exception as e:
         raise Exception(f"Lỗi điền template: {str(e)}")
+
+
+
 
 
 
@@ -476,6 +482,11 @@ with tab2:
                     
                     for file_name, file_data in st.session_state.extracted_data.items():
                         try:
+                            # Debug: Hiển thị dữ liệu sẽ được điền
+                            st.info(f"📝 Dữ liệu sẽ điền cho {file_name}:")
+                            for key, value in file_data["data"].items():
+                                st.text(f"  {{{key}}} → {value}")
+                            
                             # Điền vào template
                             filled_bytes = fill_template_word(template_bytes, file_data["data"])
                             
@@ -530,6 +541,7 @@ with tab2:
                 
                 except Exception as e:
                     st.error(f"❌ Lỗi: {str(e)}")
+
 
 
 
