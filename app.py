@@ -346,16 +346,17 @@ with tab2:
             "Nhập đường dẫn folder (Windows)",
             placeholder="Ví dụ: C:\\Users\\YourName\\Documents\\data",
             key="folder_path_input"
-        )
+        ).strip()  # Trim whitespace
     
     if folder_path:
         # Kiểm tra folder
-        st.info(f"📁 Đường dẫn: `{folder_path}`")
+        st.info(f"📁 Đường dẫn nhập: `{folder_path}`")
         
         if st.button("🔍 Kiểm tra folder"):
             # Normalize path
             normalized_path = os.path.normpath(folder_path)
             st.info(f"📁 Đường dẫn chuẩn hóa: `{normalized_path}`")
+            st.info(f"📁 Kiểm tra xem folder tồn tại: `{os.path.isdir(normalized_path)}`")
             
             if os.path.isdir(normalized_path):
                 st.success("✅ Folder tồn tại!")
@@ -363,8 +364,11 @@ with tab2:
                 # Danh sách file
                 try:
                     supported_extensions = ('.pdf', '.png', '.jpg', '.jpeg', '.docx', '.xlsx', '.txt')
+                    all_files_in_folder = os.listdir(normalized_path)
+                    st.info(f"📋 Tổng file/folder trong `{normalized_path}`: {len(all_files_in_folder)}")
+                    
                     all_files = [
-                        f for f in os.listdir(normalized_path)
+                        f for f in all_files_in_folder
                         if os.path.isfile(os.path.join(normalized_path, f)) and f.lower().endswith(supported_extensions)
                     ]
                     
@@ -377,13 +381,20 @@ with tab2:
                         # Lưu folder path vào session state nếu valid
                         st.session_state.valid_folder_path = normalized_path
                     else:
-                        st.warning(f"⚠️ Folder có {len(os.listdir(normalized_path))} file nhưng không có file hỗ trợ!")
+                        st.warning(f"⚠️ Folder có {len(all_files_in_folder)} file/folder nhưng không có file hỗ trợ!")
                         st.info("Hỗ trợ: .pdf, .png, .jpg, .jpeg, .docx, .xlsx, .txt")
+                        with st.expander("📋 File/folder trong thư mục"):
+                            for f in all_files_in_folder:
+                                st.text(f"  • {f}")
                 except Exception as e:
                     st.error(f"❌ Lỗi đọc folder: {str(e)}")
             else:
                 st.error(f"❌ Folder không tồn tại: {normalized_path}")
-                st.info("💡 Kiểm tra lại đường dẫn, có thể cần thêm dấu `\\` ở cuối")
+                st.error(f"Kiểm tra:")
+                st.error(f"  • Đường dẫn: `{normalized_path}`")
+                st.error(f"  • Có 'D:' drive không?")
+                st.error(f"  • Folder '1' có tồn tại không?")
+                st.info("💡 Thử viết đầy đủ: `D:\\1` hoặc `D:\\1\\`")
     
     if template_file and "valid_folder_path" in st.session_state:
         st.markdown("---")
